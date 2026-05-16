@@ -89,6 +89,25 @@ public class AudioPlayer: NamedNode {
     /// Indicates the player is in the midst of a seek operation
     public internal(set) var isSeeking: Bool = false
 
+    /// Monotonic counter incremented on every schedule. Completion closures
+    /// capture the value current at scheduling time; `internalCompletionHandler`
+    /// drops the callback as stale if the captured generation no longer matches.
+    ///
+    /// Protects against two trigger paths for the stale-completion race:
+    /// 1. `seek(time:)`
+    /// 2. `file` / `buffer` replacement while playing
+    /// In both cases the underlying sequence is stop -> reschedule -> play.
+    /// Without this gate, the previous segment's completion could run after
+    /// the new schedule and stomp the new playback's state. Incremented
+    /// only on the main thread.
+    private var _scheduleGeneration: UInt64 = 0
+
+    @discardableResult
+    func bumpScheduleGeneration() -> UInt64 {
+        _scheduleGeneration &+= 1
+        return _scheduleGeneration
+    }
+
     /// Length of the audio file in seconds
     public var duration: TimeInterval {
         file?.duration ?? bufferDuration
@@ -97,7 +116,7 @@ public class AudioPlayer: NamedNode {
     /// Completion handler to be called when file or buffer is done playing.
     /// This also will be called when looping from disk,
     /// but no completion is called when looping seamlessly when buffered.
-    /// This runs on an asyncronous thread and 
+    /// This runs on an asyncronous thread and
     /// requires thread-safety practice. See: https://web.mit.edu/6.031/www/fa17/classes/20-thread-safety/.
     public var completionHandler: AVAudioNodeCompletionHandler?
 
@@ -205,7 +224,12 @@ public class AudioPlayer: NamedNode {
 
     // MARK: - Internal functions
 
-    func internalCompletionHandler() {
+    func internalCompletionHandler(generation: UInt64) {
+        // Stale completion: the segment this was scheduled for was superseded
+        // by stop() (seek, file/buffer replacement, explicit restart). Drop it
+        // so it cannot mutate state that belongs to the current generation.
+        guard generation == _scheduleGeneration else { return }
+
         guard !isSeeking, status == .playing else { return }
 
         if !isLooping {
@@ -225,12 +249,12 @@ public class AudioPlayer: NamedNode {
         }
     }
 
-    func invokeCompletionHandlerOnMain() {
+    func invokeCompletionHandlerOnMain(generation: UInt64) {
         if Thread.isMainThread {
-            internalCompletionHandler()
+            internalCompletionHandler(generation: generation)
         } else {
             DispatchQueue.main.async { [weak self] in
-                self?.internalCompletionHandler()
+                self?.internalCompletionHandler(generation: generation)
             }
         }
     }

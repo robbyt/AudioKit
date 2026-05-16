@@ -1,6 +1,7 @@
-import AudioKit
 import AVFoundation
 import XCTest
+
+@testable import AudioKit
 
 class AudioPlayerTests: XCTestCase {
 
@@ -543,6 +544,57 @@ class AudioPlayerTests: XCTestCase {
         let currentTime2 = player.currentTime
         XCTAssertEqual(currentTime2, 2)
         testMD5(audio)
+    }
+
+    /// Regression test for the stale-completion race introduced by PR #2978.
+    /// When `seek(time:)` (or any stop-then-reschedule path) calls
+    /// `playerNode.stop()`, AVFoundation queues the previously-scheduled segment's
+    /// completion to fire on the audio thread. By the time the stale completion
+    /// is re-homed to main and runs `internalCompletionHandler`, `isSeeking` has
+    /// been cleared and the player is back in `.playing` on a new generation.
+    /// Without the generation guard, the stale completion runs the non-looping
+    /// cleanup branch and stomps `status` to `.stopped`, silently killing the
+    /// newly-rescheduled playback. This test directly models the stale-completion
+    /// arrival via the internal API.
+    func testStaleCompletionDoesNotStompPlayback() {
+        guard let url = Bundle.module.url(forResource: "TestResources/12345", withExtension: "wav") else {
+            XCTFail("Didn't get test file")
+            return
+        }
+
+        let engine = AudioEngine()
+        let player = AudioPlayer()
+        engine.output = player
+        player.isLooping = false
+
+        var completionCalled = 0
+        player.completionHandler = { completionCalled += 1 }
+
+        do {
+            try player.load(url: url)
+        } catch let error as NSError {
+            Log(error, type: .error)
+            XCTFail(error.description)
+        }
+
+        // Capture a generation that play() will naturally advance past.
+        let staleGeneration = player.bumpScheduleGeneration()
+
+        // Put the player into a realistic .playing state on the new generation.
+        let audio = engine.startTest(totalDuration: 1.0)
+        player.play()
+        audio.append(engine.render(duration: 0.5))
+        XCTAssertEqual(player.status, .playing)
+
+        // Stale completion arrives — exactly the state the audio-thread → main
+        // dispatch produces when a stop()-ed segment's completion lands after
+        // rescheduling.
+        player.internalCompletionHandler(generation: staleGeneration)
+
+        XCTAssertEqual(player.status, .playing,
+                       "stale completion must not stomp status to .stopped")
+        XCTAssertEqual(completionCalled, 0,
+                       "stale completion must not invoke the user-supplied handler")
     }
 
     func testSeekWillStop() {

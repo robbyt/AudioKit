@@ -52,12 +52,14 @@ extension AudioPlayer {
 
         let frameCount = AVAudioFrameCount(totalFrames)
 
+        let scheduleGen = bumpScheduleGeneration()
+
         playerNode.scheduleSegment(file,
                                    startingFrame: startFrame,
                                    frameCount: frameCount,
                                    at: audioTime,
                                    completionCallbackType: completionCallbackType) { [weak self] _ in
-            self?.invokeCompletionHandlerOnMain()
+            self?.invokeCompletionHandlerOnMain(generation: scheduleGen)
         }
 
         playerNode.prepare(withFrameCount: frameCount)
@@ -84,11 +86,13 @@ extension AudioPlayer {
             bufferOptions = [.loops, .interrupts]
         }
 
+        let scheduleGen = bumpScheduleGeneration()
+
         playerNode.scheduleBuffer(buffer,
                                   at: audioTime,
                                   options: bufferOptions,
                                   completionCallbackType: completionCallbackType) { [weak self] _ in
-            self?.invokeCompletionHandlerOnMain()
+            self?.invokeCompletionHandlerOnMain(generation: scheduleGen)
         }
 
         playerNode.prepare(withFrameCount: buffer.frameLength)
