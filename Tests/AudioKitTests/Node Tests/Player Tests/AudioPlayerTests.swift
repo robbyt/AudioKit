@@ -622,7 +622,7 @@ class AudioPlayerTests: XCTestCase {
         let audio = engine.startTest(totalDuration: 1.0)
         player.play()
         audio.append(engine.render(duration: 0.1))
-        let stoppedGeneration = player.bumpScheduleGeneration()
+        let stoppedGeneration = player.currentScheduleGeneration
         player.stop()
 
         player.internalCompletionHandler(generation: stoppedGeneration)

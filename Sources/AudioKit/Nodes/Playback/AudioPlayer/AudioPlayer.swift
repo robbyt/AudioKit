@@ -100,6 +100,10 @@ public class AudioPlayer: NamedNode {
         return scheduleGeneration
     }
 
+    var currentScheduleGeneration: UInt64 {
+        scheduleGeneration
+    }
+
     /// Length of the audio file in seconds
     public var duration: TimeInterval {
         file?.duration ?? bufferDuration
