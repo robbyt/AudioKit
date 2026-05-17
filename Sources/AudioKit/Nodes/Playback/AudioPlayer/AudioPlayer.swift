@@ -89,7 +89,7 @@ public class AudioPlayer: NamedNode {
     /// Indicates the player is in the midst of a seek operation
     public internal(set) var isSeeking: Bool = false
 
-    /// Monotonic counter incremented for every scheduled playback segment.
+    /// Generation counter incremented for every scheduled playback segment.
     /// Completion closures capture the generation current at scheduling time so
     /// callbacks from older schedules can be ignored after seek/reschedule.
     private var scheduleGeneration: UInt64 = 0
