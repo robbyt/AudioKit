@@ -206,23 +206,7 @@ public class AudioPlayer: NamedNode {
     // MARK: - Internal functions
 
     func internalCompletionHandler() {
-        guard !isSeeking, status == .playing else { return }
-
-        if !isLooping {
-            status = .stopped
-            timeBeforePlay = 0
-            seekStartTime = nil
-        }
-
-        guard let completionHandler else { return }
-
-        if Thread.isMainThread {
-            completionHandler()
-        } else {
-            DispatchQueue.main.async {
-                completionHandler()
-            }
-        }
+        completionHandler?()
     }
 
     func invokeCompletionHandlerOnMain() {

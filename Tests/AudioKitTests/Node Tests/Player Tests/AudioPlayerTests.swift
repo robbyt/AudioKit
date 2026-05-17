@@ -1,6 +1,7 @@
-import AudioKit
 import AVFoundation
 import XCTest
+
+@testable import AudioKit
 
 class AudioPlayerTests: XCTestCase {
 
@@ -545,6 +546,67 @@ class AudioPlayerTests: XCTestCase {
         testMD5(audio)
     }
 
+    /// Regression test for the seek/restart race introduced by PR #2978.
+    ///
+    /// PR #2978 made `internalCompletionHandler` unconditionally clear
+    /// playback state (`status = .stopped`, etc.) when `!isLooping`, gated only
+    /// by `!isSeeking, status == .playing`. This callback runs for STALE
+    /// completions too: `seek(time:)` calls `playerNode.stop()`, which queues
+    /// the previously-scheduled segment's completion to fire asynchronously;
+    /// by the time the stale callback lands on main, `isSeeking` has been
+    /// cleared and `status` reset to `.playing`, so the guard passes and the
+    /// cleanup branch silently kills the freshly-rescheduled playback.
+    ///
+    /// This test directly models the stale-completion arrival by hand-calling
+    /// `internalCompletionHandler` while the player is in active playback
+    /// (the exact state the racy guard left exposed). With PR #2978's
+    /// destructive cleanup in place, this call stomps `status` to `.stopped`.
+    /// With the fix in place, `internalCompletionHandler` is non-destructive
+    /// and `status` remains `.playing`.
+    func testCompletionArrivalDoesNotStompState() {
+        guard let url = Bundle.module.url(forResource: "TestResources/12345", withExtension: "wav") else {
+            XCTFail("Didn't get test file")
+            return
+        }
+
+        let engine = AudioEngine()
+        let player = AudioPlayer()
+        engine.output = player
+        player.isLooping = false
+
+        do {
+            try player.load(url: url)
+        } catch let error as NSError {
+            Log(error, type: .error)
+            XCTFail(error.description)
+        }
+
+        let audio = engine.startTest(totalDuration: 1.0)
+        player.play()
+        audio.append(engine.render(duration: 0.1))
+        XCTAssertEqual(player.status, .playing)
+        XCTAssertFalse(player.isSeeking)
+
+        player.seek(time: 0.1)
+        XCTAssertEqual(player.status, .playing)
+
+        let completionArrived = expectation(description: "stale completion arrived on main")
+        player.completionHandler = {
+            completionArrived.fulfill()
+        }
+
+        // Simulate a stale completion crossing the same background-thread →
+        // main-thread hop used by production callbacks after seek() has already
+        // rescheduled playback.
+        DispatchQueue.global().async {
+            player.invokeCompletionHandlerOnMain()
+        }
+        wait(for: [completionArrived], timeout: 1.0)
+
+        XCTAssertEqual(player.status, .playing,
+                       "completion arrivals must not mutate state during active playback")
+    }
+
     func testSeekWillStop() {
         guard let url = Bundle.module.url(forResource: "TestResources/12345", withExtension: "wav") else {
             XCTFail("Didn't get test file")
@@ -637,8 +699,8 @@ class AudioPlayerTests: XCTestCase {
 
     // https://github.com/AudioKit/AudioKit/issues/2971
     // Verifies that play() restarts after non-looping playback completes.
-    // The completion handler resets status to .stopped so subsequent
-    // play() calls are not silently ignored.
+    // Once the underlying player node is no longer rendering, play() should
+    // not be blocked solely because the public status still reads .playing.
     func testPlayAfterNonLoopingCompletion() {
         guard let counting = Bundle.module.url(forResource: "TestResources/12345", withExtension: "wav"),
               let drumLoop = Bundle.module.url(forResource: "TestResources/drumloop", withExtension: "wav")

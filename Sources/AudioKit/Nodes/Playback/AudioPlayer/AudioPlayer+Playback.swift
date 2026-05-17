@@ -25,7 +25,13 @@ public extension AudioPlayer {
             return
         }
 
-        guard status != .playing else { return }
+        // The status flag alone is not authoritative — after a natural end-of-track
+        // completion fires, `status` may still read `.playing` even though the
+        // underlying AVAudioPlayerNode has consumed its last segment and transitioned
+        // `isPlaying` to false. Also early-return only when the player node is still
+        // actually rendering audio; this allows `play()` from within `completionHandler`
+        // to restart playback after a non-looping track finishes.
+        guard !(status == .playing && playerNode.isPlaying) else { return }
 
         if let startTime {
             seekStartTime = startTime
